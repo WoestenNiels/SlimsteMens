@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<title>De Slimste Mens - Finale</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #111;
+    color: white;
+    text-align: center;
+  }
+  .timers {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+    gap: 50px;
+  }
+  .timer {
+    font-size: 2em;
+    padding: 20px;
+    border-radius: 10px;
+    min-width: 180px;
+  }
+  .player1 { background: #007bff; }
+  .player2 { background: #dc3545; }
+  .question {
+    font-size: 1.8em;
+    margin: 40px 0 10px;
+  }
+  .answers {
+    font-size: 1.2em;
+    margin: 10px 0;
+  }
+  input {
+    font-size: 1.2em;
+    padding: 10px;
+    width: 60%;
+  }
+  .found { color: #00ff7f; }
+  .missed { color: #ff4444; }
+  .hidden { display: none; }
+  button { font-size: 1.2em; padding: 10px 20px; margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<h1>Finale - De Slimste Mens</h1>
+
+<div id="setup">
+  <p>Voer spelers en starttijden in:</p>
+  <input id="player1Name" placeholder="Naam speler 1"><br><br>
+  <label>Starttijd speler 1 (s):</label><br>
+  <input id="player1Time" type="number" value="120"><br><br>
+
+  <input id="player2Name" placeholder="Naam speler 2"><br><br>
+  <label>Starttijd speler 2 (s):</label><br>
+  <input id="player2Time" type="number" value="120"><br><br>
+
+  <button onclick="startGame()">Start Spel</button>
+</div>
+
+<div id="game" class="hidden">
+  <div class="timers">
+    <div id="p1Timer" class="timer player1"></div>
+    <div id="p2Timer" class="timer player2"></div>
+  </div>
+
+  <!-- Pauzeknop -->
+  <button id="pauseBtn" onclick="togglePause()">⏸️ Pauzeer</button>
+
+  <div class="question" id="question"></div>
+  <div class="answers" id="answers"></div>
+  <input id="answerInput" placeholder="Typ een antwoord of 'pass'" onkeydown="handleKey(event)">
+  <div id="status"></div>
+</div>
+
+<div id="endScreen" class="hidden">
+  <h2 id="winnerText"></h2>
+  <button onclick="restartGame()">Opnieuw spelen</button>
+</div>
+
+<!-- Hier wordt het vragenbestand ingeladen -->
+<script src="vragen.js"></script>
+
+<script>
+let players = [
+  { name: '', time: 0, element: null, timer: null, passed: false },
+  { name: '', time: 0, element: null, timer: null, passed: false }
+];
+let currentPlayer = 0;
+let active = false;
+let currentQuestion = {};
+let remainingAnswers = [];
+let usedQuestions = []; // blijft behouden bij opnieuw spelen
+let paused = false;
+let wasActive = false;
+
+function startGame() {
+  players[0].name = document.getElementById('player1Name').value || "Speler 1";
+  players[1].name = document.getElementById('player2Name').value || "Speler 2";
+  players[0].time = parseInt(document.getElementById('player1Time').value);
+  players[1].time = parseInt(document.getElementById('player2Time').value);
+
+  players[0].element = document.getElementById('p1Timer');
+  players[1].element = document.getElementById('p2Timer');
+
+  document.getElementById('setup').classList.add('hidden');
+  document.getElementById('endScreen').classList.add('hidden');
+  document.getElementById('game').classList.remove('hidden');
+
+  updateTimers();
+  newQuestion();
+}
+
+function updateTimers() {
+  players[0].element.innerText = `${players[0].name}: ${players[0].time}s`;
+  players[1].element.innerText = `${players[1].name}: ${players[1].time}s`;
+}
+
+function startTurn() {
+  active = true;
+  players[currentPlayer].passed = false;
+  const p = players[currentPlayer];
+  p.timer = setInterval(() => {
+    if (!paused) {
+      p.time--;
+      updateTimers();
+      if (p.time <= 0) endGame();
+    }
+  }, 1000);
+}
+
+function stopTurn() {
+  active = false;
+  clearInterval(players[0].timer);
+  clearInterval(players[1].timer);
+}
+
+function handleKey(e) {
+  if (paused) return;
+  if (e.key === "Enter" && active) {
+    const val = e.target.value.trim().toLowerCase();
+    e.target.value = "";
+    if (!val) return;
+    if (val === "pass") {
+      players[currentPlayer].passed = true;
+      stopTurn();
+      if (players[0].passed && players[1].passed) {
+        showMissedAnswers();
+      } else {
+        switchTurn();
+      }
+      return;
+    }
+
+    const idx = remainingAnswers.indexOf(val);
+    if (idx !== -1) {
+      remainingAnswers.splice(idx, 1);
+      document.getElementById("answers").innerHTML += `<div class='found'>${val}</div>`;
+      const opponent = (currentPlayer === 0) ? 1 : 0;
+      players[opponent].time -= 20;
+      if (players[opponent].time <= 0) endGame();
+      updateTimers();
+      if (remainingAnswers.length === 0) {
+        stopTurn();
+        setTimeout(newQuestion, 10000);
+      }
+    }
+  }
+}
+
+function switchTurn() {
+  currentPlayer = currentPlayer === 0 ? 1 : 0;
+  startTurn();
+}
+
+function newQuestion() {
+  stopTurn();
+  players[0].passed = players[1].passed = false;
+  document.getElementById("answers").innerHTML = "";
+
+  if (vragen.length === 0) {
+    document.getElementById("question").innerText = "Geen vragen meer beschikbaar!";
+    return;
+  }
+
+  let idx;
+  let tries = 0;
+  do {
+    idx = Math.floor(Math.random() * vragen.length);
+    tries++;
+  } while (usedQuestions.includes(idx) && tries < 1000);
+
+  // Geen vragen meer beschikbaar
+  if (usedQuestions.length >= vragen.length) {
+    document.getElementById("question").innerText = "Geen nieuwe vragen meer beschikbaar!";
+    stopTurn();
+    return;
+  }
+
+  usedQuestions.push(idx);
+  currentQuestion = vragen[idx];
+  remainingAnswers = [...currentQuestion.answers];
+  document.getElementById("question").innerText = `Wat weet je over ${currentQuestion.person}?`;
+
+  const next = players[0].time <= players[1].time ? 0 : 1;
+  currentPlayer = next;
+  startTurn();
+}
+
+function showMissedAnswers() {
+  stopTurn();
+  if (remainingAnswers.length > 0) {
+    document.getElementById("answers").innerHTML += "<div class='missed'><br>Niet gevonden: " +
+      remainingAnswers.join(", ") + "</div>";
+  }
+  setTimeout(newQuestion, 10000);
+}
+
+function endGame() {
+  stopTurn();
+  document.getElementById("game").classList.add("hidden");
+  document.getElementById("endScreen").classList.remove("hidden");
+  const winner = players[0].time > players[1].time ? players[0] : players[1];
+  document.getElementById("winnerText").innerText = `${winner.name} wint met ${winner.time}s over!`;
+}
+
+/* --- PAUZEFUNCTIE --- */
+function togglePause() {
+  const btn = document.getElementById("pauseBtn");
+  paused = !paused;
+
+  if (paused) {
+    wasActive = active;
+    stopTurn();
+    btn.textContent = "▶️ Hervat";
+    document.getElementById("answerInput").disabled = true;
+  } else {
+    btn.textContent = "⏸️ Pauzeer";
+    document.getElementById("answerInput").disabled = false;
+    if (wasActive) startTurn();
+  }
+}
+
+/* --- OPNIEUW SPELEN --- */
+function restartGame() {
+  stopTurn();
+  document.getElementById("game").classList.add("hidden");
+  document.getElementById("endScreen").classList.add("hidden");
+  document.getElementById("setup").classList.remove("hidden");
+
+  // reset alleen spelersgegevens, NIET usedQuestions
+  players = [
+    { name: '', time: 0, element: null, timer: null, passed: false },
+    { name: '', time: 0, element: null, timer: null, passed: false }
+  ];
+  currentPlayer = 0;
+  paused = false;
+  wasActive = false;
+
+  // inputvelden leegmaken
+  document.getElementById('player1Name').value = '';
+  document.getElementById('player2Name').value = '';
+  document.getElementById('player1Time').value = 120;
+  document.getElementById('player2Time').value = 120;
+}
+</script>
+
+</body>
+</html>
