@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<title>De Slimste Mens - Online Finale</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #111; color: white; text-align: center; }
+  .timers { display: flex; justify-content: center; margin-top: 20px; gap: 50px; }
+  .timer { font-size: 2em; padding: 20px; border-radius: 10px; min-width: 180px; }
+  .player1 { background: #007bff; }
+  .player2 { background: #dc3545; }
+  .question { font-size: 1.8em; margin: 40px 0 10px; }
+  .answers { font-size: 1.2em; margin: 10px 0; }
+  input { font-size: 1.2em; padding: 10px; width: 60%; }
+  .found { color: #00ff7f; }
+  .missed { color: #ff4444; }
+  .hidden { display: none; }
+  button { font-size: 1.2em; padding: 10px 20px; margin-top: 20px; }
+</style>
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+<script src="firebase.js"></script>
+<script src="vragen.js"></script>
+</head>
+<body>
+
+<h1>Finale - De Slimste Mens (Online)</h1>
+
+<div id="setup">
+  <p>Voer spelers en starttijden in:</p>
+  <input id="gameCode" placeholder="Spelcode (bv. slim123)" /><br><br>
+  <input id="playerName" placeholder="Jouw naam" /><br><br>
+  <button onclick="joinGame()">Deelnemen</button>
+</div>
+
+<div id="game" class="hidden">
+  <div class="timers">
+    <div id="p1Timer" class="timer player1"></div>
+    <div id="p2Timer" class="timer player2"></div>
+  </div>
+  <div class="question" id="question"></div>
+  <div class="answers" id="answers"></div>
+  <input id="answerInput" placeholder="Typ een antwoord of 'pass'" onkeydown="handleKey(event)">
+  <div id="status"></div>
+  <button onclick="togglePause()">⏸ Pauze / Hervat</button>
+</div>
+
+<div id="endScreen" class="hidden">
+  <h2 id="winnerText"></h2>
+  <button onclick="restartGame()">Opnieuw spelen</button>
+</div>
+
+<script>
+let playerName = "";
+let gameCode = "";
+let playerIndex = null;
+let gameData = null;
+let paused = false;
+
+// 🔹 Deelnemen aan spel (of hosten)
+function joinGame() {
+  playerName = document.getElementById("playerName").value.trim();
+  gameCode = document.getElementById("gameCode").value.trim();
+
+  if (!playerName || !gameCode) return alert("Vul zowel naam als spelcode in.");
+
+  const gameRef = db.ref("games/" + gameCode);
+
+  gameRef.once("value").then(snapshot => {
+    if (!snapshot.exists()) {
+      // nieuw spel (host)
+      const initialData = {
+        players: [{ name: playerName, time: 120, passed: false },
+                  { name: "", time: 120, passed: false }],
+        currentPlayer: 0,
+        active: false,
+        usedQuestions: [],
+        paused: false,
+        currentQuestion: null
+      };
+      gameRef.set(initialData);
+      playerIndex = 0;
+      startGameSync(gameRef);
+    } else {
+      // join bestaand spel
+      const data = snapshot.val();
+      if (data.players[1].name && data.players[1].name !== playerName)
+        return alert("Beide spelers zijn al verbonden.");
+      gameRef.child("players/1").update({ name: playerName });
+      playerIndex = 1;
+      startGameSync(gameRef);
+    }
+  });
+}
+
+// 🔹 Synchronisatie met Firebase
+function startGameSync(ref) {
+  document.getElementById("setup").classList.add("hidden");
+  document.getElementById("game").classList.remove("hidden");
+
+  ref.on("value", snapshot => {
+    gameData = snapshot.val();
+    updateUI();
+  });
+}
+
+// 🔹 UI bijwerken
+function updateUI() {
+  if (!gameData) return;
+  const p1 = gameData.players[0];
+  const p2 = gameData.players[1];
+
+  document.getElementById("p1Timer").innerText = `${p1.name || "?"}: ${p1.time}s`;
+  document.getElementById("p2Timer").innerText = `${p2.name || "?"}: ${p2.time}s`;
+
+  document.getElementById("question").innerText =
+    gameData.currentQuestion ? `Wat weet je over ${gameData.currentQuestion.person}?` : "";
+
+  document.getElementById("answers").innerHTML = "";
+
+  if (gameData.paused) {
+    document.getElementById("status").innerText = "⏸ Gepauzeerd";
+  } else {
+    document.getElementById("status").innerText = "";
+  }
+
+  if (p1.time <= 0 || p2.time <= 0) {
+    endGame();
+  }
+}
+
+// 🔹 Pauze
+function togglePause() {
+  if (!gameCode) return;
+  paused = !paused;
+  db.ref(`games/${gameCode}/paused`).set(paused);
+}
+
+// 🔹 Antwoordverwerking
+function handleKey(e) {
+  if (e.key !== "Enter" || gameData.paused) return;
+  const val = e.target.value.trim().toLowerCase();
+  if (!val) return;
+  e.target.value = "";
+
+  if (val === "pass") {
+    const newData = { ...gameData };
+    newData.players[playerIndex].passed = true;
+    db.ref("games/" + gameCode).update(newData);
+  }
+}
+
+// 🔹 Spel herstarten
+function restartGame() {
+  db.ref("games/" + gameCode).remove();
+  location.reload();
+}
+
+// 🔹 Einde spel
+function endGame() {
+  document.getElementById("game").classList.add("hidden");
+  document.getElementById("endScreen").classList.remove("hidden");
+
+  const p1 = gameData.players[0];
+  const p2 = gameData.players[1];
+  const winner = p1.time > p2.time ? p1 : p2;
+  document.getElementById("winnerText").innerText =
+    `${winner.name} wint met ${winner.time}s over!`;
+}
+</script>
+
+</body>
+</html>
