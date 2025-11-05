@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<title>De Slimste Mens - Online Finale</title>
+<style>
+body { font-family: Arial; background: #111; color: white; text-align: center; }
+.timers { display: flex; justify-content: center; gap: 50px; margin-top: 20px; }
+.timer { font-size: 2em; padding: 20px; border-radius: 10px; min-width: 180px; }
+.player1 { background: #007bff; }
+.player2 { background: #dc3545; }
+.question { font-size: 1.8em; margin: 40px 0 10px; }
+.answers { font-size: 1.2em; margin: 10px 0; }
+input { font-size: 1.2em; padding: 10px; width: 60%; }
+.found { color: #00ff7f; }
+.missed { color: #ff4444; }
+.hidden { display: none; }
+button { font-size: 1.2em; padding: 10px 20px; margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<h1>De Slimste Mens - Online Finale</h1>
+
+<div id="setup">
+<p>Voer spelcode, naam en starttijd in:</p>
+<input id="gameCode" placeholder="Spelcode"><br><br>
+<input id="playerName" placeholder="Jouw naam"><br><br>
+<label>Starttijd (seconden):</label><br>
+<input id="playerTime" type="number" value="120"><br><br>
+<button id="joinBtn">Start / Join Spel</button>
+</div>
+
+<div id="waiting" class="hidden">
+<p>Wachten op andere speler...</p>
+<div id="playersList"></div>
+</div>
+
+<div id="game" class="hidden">
+<div class="timers">
+  <div id="p1Timer" class="timer player1"></div>
+  <div id="p2Timer" class="timer player2"></div>
+</div>
+<div class="question" id="question"></div>
+<div class="answers" id="answers"></div>
+<input id="answerInput" placeholder="Typ een antwoord of 'pass'">
+<div id="status"></div>
+<button id="pauseBtn">Pauze</button>
+</div>
+
+<div id="endScreen" class="hidden">
+<h2 id="winnerText"></h2>
+<button onclick="location.reload()">Opnieuw spelen</button>
+</div>
+
+<script type="module">
+import { db, ref, set, onValue, update } from "./firebase.js";
+import { vragen } from "./vragen.js";
+
+let gameRef, playerId;
+let localPlayer = { name: "", time: 0 };
+let gameData = {};
+let interval = null;
+let paused = false;
+
+const setupDiv = document.getElementById("setup");
+const waitingDiv = document.getElementById("waiting");
+const playersList = document.getElementById("playersList");
+const gameDiv = document.getElementById("game");
+const p1Timer = document.getElementById("p1Timer");
+const p2Timer = document.getElementById("p2Timer");
+const questionDiv = document.getElementById("question");
+const answersDiv = document.getElementById("answers");
+const answerInput = document.getElementById("answerInput");
+const pauseBtn = document.getElementById("pauseBtn");
+const statusDiv = document.getElementById("status");
+const endScreen = document.getElementById("endScreen");
+const winnerText = document.getElementById("winnerText");
+
+document.getElementById("joinBtn").onclick = async () => {
+  const code = document.getElementById("gameCode").value.trim();
+  const name = document.getElementById("playerName").value.trim() || "Speler";
+  const time = parseInt(document.getElementById("playerTime").value) || 120;
+  if (!code) { alert("Voer een spelcode in"); return; }
+
+  playerId = name;
+  localPlayer.name = name;
+  localPlayer.time = time;
+  gameRef = ref(db, "games/" + code);
+
+  // Voeg speler toe als die nog niet bestaat
+  set(ref(db, `games/${code}/players/${name}`), { name, time, passed: false });
+
+  // Initialiseer usedQuestions array als niet bestaat
+  set(ref(db, `games/${code}/usedQuestions`), null);
+
+  setupDiv.classList.add("hidden");
+  waitingDiv.classList.remove("hidden");
+  updatePlayersList();
+};
+
+// Luister realtime naar game updates
+onValue(ref(db, "games/"), snapshot => {
+  const val = snapshot.val();
+  if(!val) return;
+  const code = Object.keys(val).find(c=>val[c].players && val[c].players[playerId]);
+  if(!code) return;
+  gameData = val[code];
+
+  updatePlayersList();
+
+  const playerKeys = Object.keys(gameData.players);
+  if(playerKeys.length === 2 && !gameData.currentQuestion){
+    // Start het spel automatisch als beide spelers er zijn
+    startGame(code);
+  }
+
+  // Update timers en vragen
+  if(gameData.currentQuestion){
+    questionDiv.innerText = `Wat weet je over ${gameData.currentQuestion.person}?`;
+    answersDiv.innerHTML = '';
+    gameData.currentQuestion.answers.forEach(a=>{
+      if(!gameData.currentQuestion.remaining.includes(a)) answersDiv.innerHTML += `<div class='found'>${a}</div>`;
+    });
+    updateTimers();
+  }
+});
+
+// Wacht scherm spelerslijst
+function updatePlayersList(){
+  if(!gameData.players) return;
+  playersList.innerHTML = "<strong>Spelers:</strong><br>";
+  Object.values(gameData.players).forEach(p=>{
+    playersList.innerHTML += `${p.name} (${p.time}s)<br>`;
+  });
+}
+
+// Start het spel
+function startGame(code){
+  waitingDiv.classList.add("hidden");
+  gameDiv.classList.remove("hidden");
+  newQuestion(code);
+  startTimer(code);
+}
+
+// Timer functie
+function startTimer(code){
+  if(interval) clearInterval(interval);
+  interval = setInterval(() => {
+    if(paused) return;
+    if(gameData.players && gameData.players[playerId]){
+      gameData.players[playerId].time--;
+      updateTimers();
+      update(ref(db, `games/${code}/players/${playerId}/time`), gameData.players[playerId].time);
+
+      if(gameData.players[playerId].time <= 0) {
+        clearInterval(interval);
+        endGame();
+      }
+    }
+  }, 1000);
+}
+
+// Update timers
+function updateTimers(){
+  if(gameData.players){
+    const keys = Object.keys(gameData.players);
+    p1Timer.innerText = keys[0] ? `${gameData.players[keys[0]].name}: ${gameData.players[keys[0]].time}s` : "";
+    p2Timer.innerText = keys[1] ? `${gameData.players[keys[1]].name}: ${gameData.players[keys[1]].time}s` : "";
+  }
+}
+
+// Pauze knop
+pauseBtn.onclick = () => { paused = !paused; pauseBtn.innerText = paused ? "Hervat" : "Pauze"; }
+
+// Nieuwe vraag
+function newQuestion(code){
+  if(!vragen.length) return;
+  let idx;
+  do { idx = Math.floor(Math.random() * vragen.length); } 
+  while(gameData.usedQuestions && gameData.usedQuestions.includes(idx) && gameData.usedQuestions.length < vragen.length);
+  
+  const q = vragen[idx];
+  const remaining = [...q.answers];
+
+  update(ref(db, `games/${code}/currentQuestion`), { person: q.person, answers: q.answers, remaining });
+  if(!gameData.usedQuestions) gameData.usedQuestions = [];
+  gameData.usedQuestions.push(idx);
+  update(ref(db, `games/${code}/usedQuestions`), gameData.usedQuestions);
+
+  // bepaal speler met minste tijd als eerste
+  let keys = Object.keys(gameData.players);
+  keys.sort((a,b)=> gameData.players[a].time - gameData.players[b].time);
+  update(ref(db, `games/${code}/currentPlayer`), keys[0]);
+}
+
+// Antwoorden
+document.getElementById("answerInput").addEventListener("keydown", e=>{
+  if(e.key !== "Enter" || !gameData.currentQuestion) return;
+  const val = e.target.value.trim().toLowerCase();
+  e.target.value = "";
+  if(!val) return;
+
+  const remaining = gameData.currentQuestion.remaining || [];
+  const code = gameRef.key;
+
+  if(val === "pass"){
+    const keys = Object.keys(gameData.players);
+    const other = keys.find(k=>k!==playerId);
+    update(ref(db, `games/${code}/currentPlayer`), other);
+    update(ref(db, `games/${code}/players/${playerId}/passed`), true);
+
+    if(keys.every(k=>gameData.players[k].passed)){
+      const missed = remaining.join(", ");
+      answersDiv.innerHTML += `<div class='missed'><br>Niet gevonden: ${missed}</div>`;
+      setTimeout(()=>newQuestion(code),10000);
+    }
+  } else {
+    const idx = remaining.indexOf(val);
+    if(idx !== -1){
+      remaining.splice(idx,1);
+      const otherId = Object.keys(gameData.players).find(k=>k!==playerId);
+      let oppTime = gameData.players[otherId].time - 20;
+      if(oppTime<0) oppTime=0;
+      update(ref(db, `games/${code}/currentQuestion/remaining`), remaining);
+      update(ref(db, `games/${code}/players/${otherId}/time`), oppTime);
+      answersDiv.innerHTML += `<div class='found'>${val}</div>`;
+      if(remaining.length===0) setTimeout(()=>newQuestion(code),10000);
+    }
+  }
+});
+
+// Einde spel
+function endGame(){
+  clearInterval(interval);
+  gameDiv.classList.add("hidden");
+  endScreen.classList.remove("hidden");
+  const keys = Object.keys(gameData.players);
+  let winner = gameData.players[keys[0]];
+  if(keys.length>1 && gameData.players[keys[1]].time > winner.time) winner = gameData.players[keys[1]];
+  winnerText.innerText = `${winner.name} wint met ${winner.time}s over!`;
+}
+</script>
+
+</body>
+</html>
